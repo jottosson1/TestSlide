@@ -42,54 +42,42 @@ def _is_a_mock(maybe_mock: Any) -> bool:
     )
 
 
-def _validate_callable_signature(
-    skip_first_arg, callable_template, template, attr_name, args, kwargs
-):
-    if skip_first_arg and not inspect.ismethod(callable_template):
-        callable_template = functools.partial(callable_template, None)
-    try:
-        signature = inspect.signature(callable_template, follow_wrapped=False)
-    except ValueError:
-        return False
-
-    try:
-        signature.bind(*args, **kwargs)
-    except TypeError as e:
-        raise TypeError("{}, {}: {}".format(repr(template), repr(attr_name), str(e)))
-    return True
-
-
 def _validate_argument_type(expected_type, name: str, value) -> None:
-    original_check_type = typeguard.check_type
-
-    def wrapped_check_type(argname, inner_value, inner_expected_type, *args, **kwargs):
-        if _is_a_mock(inner_value):
-            if _extract_mock_template(inner_value) is None:
-                return
-        return original_check_type(
-            argname, inner_value, inner_expected_type, *args, **kwargs
-        )
-
-    with unittest.mock.patch.object(typeguard, "check_type", new=wrapped_check_type):
-        typeguard.check_type(name, value, expected_type)
+    if _is_a_mock(value):
+        template = _extract_mock_template(value)
+        if not template:
+            return
+    typeguard.check_type(name, value, expected_type)
 
 
-def _validate_callable_arg_types(
-    skip_first_arg,
-    callable_template: Callable,
-    args: Tuple[Any],
-    kwargs: Dict[str, Any],
+def _validate_function_signature(
+    callable_template: Callable, args: Tuple[Any], kwargs: Dict[str, Any]
 ):
     argspec = inspect.getfullargspec(callable_template)
-    idx_offest = 1 if skip_first_arg else 0
+    signature: Optional[inspect.Signature]
+    try:
+        signature = inspect.signature(callable_template)
+    except ValueError:
+        signature = None
     type_errors = []
     for idx in range(0, len(args)):
         if argspec.args:
-            if idx + idx_offest >= len(argspec.args):
-                if argspec.varargs:
+            # We use the signature whenever available because for class methods
+            # argspec has the extra 'cls' value
+            if signature:
+                argnames = list(signature.parameters.keys())
+                if len(argnames) - 1 < idx:
+                    # we might have some *args
+                    if not argspec.varargs:
+                        type_errors.append(
+                            f"Got extra argument with value '{args[idx]}'"
+                        )
+
                     continue
-                raise TypeError("Extra argument given: ", repr(args[idx]))
-            argname = argspec.args[idx + idx_offest]
+
+                argname = argnames[idx]
+            else:
+                argname = argspec.args[idx]
             try:
                 expected_type = argspec.annotations.get(argname)
                 if not expected_type:
@@ -129,24 +117,7 @@ def _validate_callable_arg_types(
         )
 
 
-def _skip_first_arg(template, attr_name):
-    if not isinstance(template, type):
-        return False
-    for klass in template.__mro__:
-        if attr_name not in klass.__dict__:
-            continue
-        attr = klass.__dict__[attr_name]
-        if isinstance(attr, classmethod):
-            return True
-        elif isinstance(attr, staticmethod):
-            return False
-        else:
-            return True
-
-    return False
-
-
-def _wrap_signature_and_type_validation(value, template, attr_name, type_validation):
+def _wrap_signature_validation(value, template, attr_name, validate_types):
     if _is_a_mock(template):
         template = _extract_mock_template(template)
         if not template:
@@ -157,20 +128,30 @@ def _wrap_signature_and_type_validation(value, template, attr_name, type_validat
         return value
 
     callable_template = getattr(template, attr_name)
+    # FIXME decouple from _must_skip. It tells when self should be skipped
+    # for signature validation.
+    if unittest.mock._must_skip(template, attr_name, isinstance(template, type)):
+        callable_template = functools.partial(callable_template, None)
 
-    skip_first_arg = _skip_first_arg(template, attr_name)
+    try:
+        signature = inspect.signature(callable_template, follow_wrapped=False)
+    except ValueError:
+        signature = None
 
-    def with_sig_and_type_validation(*args, **kwargs):
-        if _validate_callable_signature(
-            skip_first_arg, callable_template, template, attr_name, args, kwargs
-        ):
-            if type_validation:
-                _validate_callable_arg_types(
-                    skip_first_arg, callable_template, args, kwargs
+    def with_sig_check(*args, **kwargs):
+        if signature:
+            try:
+                signature.bind(*args, **kwargs)
+            except TypeError as e:
+                raise TypeError(
+                    "{}, {}: {}".format(repr(template), repr(attr_name), str(e))
                 )
+            if validate_types:
+                _validate_function_signature(callable_template, args, kwargs)
+
         return value(*args, **kwargs)
 
-    return with_sig_and_type_validation
+    return with_sig_check
 
 
 def _validate_return_type(template, value):
@@ -178,9 +159,20 @@ def _validate_return_type(template, value):
         argspec = inspect.getfullargspec(template)
     except TypeError:
         return
+    source_file = inspect.getsourcefile(template)
+    source_line = inspect.getsourcelines(template)
+
     expected_type = argspec.annotations.get("return")
     if expected_type:
-        _validate_argument_type(expected_type, "return", value)
+        try:
+            _validate_argument_type(expected_type, "return", value)
+        except TypeError:
+            error_msg = (
+                f"Call with incorrect return types at {source_file}:{source_line[1]}:\n"
+                f"expected {expected_type} got {value}")
+            raise TypeError(
+                error_msg
+            )
 
 
 ##

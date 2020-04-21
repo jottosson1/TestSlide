@@ -3,8 +3,6 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import Optional, Dict, Union, Tuple
-
 attribute = "value"
 
 
@@ -19,11 +17,6 @@ class SomeClass:
 
     def method(self):
         pass
-
-    def instance_method_with_star_args(
-        self, first, *args: str, a: bool, b: int, c: Optional[int], d: int = 3
-    ) -> int:
-        return 3
 
 
 class TargetStr(object):
@@ -112,15 +105,7 @@ async def async_test_function(
     return "original response"
 
 
-UnionArgType = Dict[str, Union[str, int]]
+def invalid_return_type_function() -> int:
+    return "string response"
 
 
-def test_union(arg: UnionArgType):
-    pass
-
-
-TupleArgType = Dict[str, Tuple[str, int]]
-
-
-def test_tuple(arg: TupleArgType):
-    pass
