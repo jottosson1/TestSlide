@@ -144,7 +144,7 @@ coveralls: coverage_combine
 .PHONY: install_build_deps
 install_build_deps:
 	@printf "${TERM_BRIGHT}INSTALL BUILD DEPS\n${TERM_NONE}"
-	${Q} pip install -e .[test,build]
+	pip install -e .[test,build]
 
 .PHONY: sdist
 sdist:
